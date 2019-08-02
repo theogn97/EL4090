@@ -18,6 +18,12 @@
 #define NUM_LEDS    4
 CRGB leds[NUM_LEDS];
 
+int solenoidPin1 = 16; //A
+int solenoidPin2 = 17; //B
+int solenoidPin3 = 5;  //Aquades
+int solenoidPin4 = 18; //HCl
+int solenoidPin5 = 19; //KOH
+
 String ID = "ITB-001";
 
 float minec, maxec, minph, maxph, minflow, maxflow, minint, maxint;
@@ -30,7 +36,7 @@ float lux;
 float phValue;
 
 volatile int flow_frequency;
-unsigned int l_min;
+int l_min;
 unsigned char flowsensor = 15;
 
 int sensorValue = 0; 
@@ -40,13 +46,18 @@ int buf[10],temp;
 
 BH1750 lightMeter(0x23);
 
+float tempEC[10], tempPH[10], tempLux[10];
+int tempFlow[10];
+float finalEC, finalPH, finalLux;
+int finalFlow;
+
 //Interrupt Function untuk Flow Sensor
 void flow ()
 {
    flow_frequency++;
 }
 
-void setup()
+void setup ()
 {
   //Memulai program
   int BAUDRATE = 115200;
@@ -54,6 +65,11 @@ void setup()
   Wire.begin();
   pinMode(TdsSensorPin,INPUT);
   pinMode(phPin,INPUT);
+  pinMode(solenoidPin1, OUTPUT);
+  pinMode(solenoidPin2, OUTPUT);
+  pinMode(solenoidPin3, OUTPUT);
+  pinMode(solenoidPin4, OUTPUT);
+  pinMode(solenoidPin5, OUTPUT);
 
   Serial.println("Hydrotech");
   Serial.println("---------");
@@ -144,26 +160,132 @@ void setup()
     Serial.println(F("Light sensor initialized!"));
   }
   else {
-    Serial.println(F("Error initialising BH1750"));
+    Serial.println(F("Error initializing BH1750"));
   }
-  Serial.println("Parameter scan starting...");
   Serial.println("");
   delay(1000);
   pinMode(flowsensor, INPUT);
   digitalWrite(flowsensor, HIGH); // Optional Internal Pull-Up
   attachInterrupt(15, flow, RISING); // Setup Interrupt
   sei(); // Enable interrupts
+  Serial.println("Flow sensor initialized!");
+  delay(1000);
+  digitalWrite(solenoidPin1, HIGH);
+  Serial.println("A valve started");
+  delay(1000);
+  digitalWrite(solenoidPin2, HIGH);
+  Serial.println("B valve started");
+  delay(1000);
+  digitalWrite(solenoidPin3, HIGH);
+  Serial.println("Aquades valve started");
+  delay(1000);
+  digitalWrite(solenoidPin4, HIGH);
+  Serial.println("HCl valve started");
+  delay(1000);
+  digitalWrite(solenoidPin5, HIGH);
+  Serial.println("KOH valve started");
+  delay(1000);
+  Serial.println("All valves initialized!");
   delay(1000);
 }
 
-void loop() {
-  bacaEC();
-  bacaLux();
-  bacaFlow();
-  bacaPH();
+void loop ()
+{
+  delay(5000);
+  bacaParameter();
+  controlValve();
+}
+
+//Membaca semua parameter
+void bacaParameter ()
+{
+  tempEC[0] = 0;
+  tempLux[0] = 0;
+  tempFlow[0] = 0;
+  tempPH[0] = 0;
+  tempEC[1] = 10;
+  tempLux[1] = 10;
+  tempFlow[1] = 10;
+  tempPH[1] = 10;
+  int i = 1;
+  Serial.println("Parameter scan starting...");
   Serial.println("");
-  //kirimData();
-  delay(1500);
+  while (((tempEC[i]-tempEC[i-1])<-0.1)||((tempEC[i]-tempEC[i-1])>0.1)||((tempPH[i]-tempPH[i-1])<-0.1)||((tempPH[i]-tempPH[i-1])>0.1)||((tempFlow[i]-tempFlow[i-1])<-1)||((tempFlow[i]-tempFlow[i-1])>1)||((tempLux[i]-tempLux[i-1])<-20)||((tempLux[i]-tempLux[i-1])>20))
+  {
+    i++;
+    bacaEC();
+    tempEC[i] = ecValue;
+    bacaLux();
+    tempLux[i] = lux;
+    bacaFlow();
+    tempFlow[i] = l_min;
+    bacaPH();
+    tempPH[i] = phValue;
+    if (i > 8)
+    {
+      i = 1;
+      tempEC[0] = tempEC[9];
+      tempLux[0] = tempLux[9];
+      tempFlow[0] = tempFlow[9];
+      tempPH[0] = tempPH[9];
+    }
+    delay(1000);
+  }
+  finalEC = tempEC[i];
+  finalLux = tempLux[i];
+  finalFlow = tempFlow[i];
+  finalPH = tempPH[i];
+  Serial.println("");
+  Serial.println("Parameter scan complete");
+  kirimData();
+  Serial.println("Data sent to Firebase");
+  Serial.println("");
+}
+
+//Buka dan tutup valve
+void controlValve ()
+{
+  if (finalEC < minec)
+  {
+    Serial.println("EC value too low!");
+    Serial.println("Optimizing EC value...");
+    tambahEC();
+  }
+  else
+  {
+    Serial.println("EC value not too low");
+  }
+  if (finalEC > maxec)
+  {
+    Serial.println("EC value too high!");
+    Serial.println("Optimizing EC value...");
+    kurangiEC();
+  }
+  else
+  {
+    Serial.println("EC value not too high");
+  }
+  if (finalPH < minph)
+  {
+    Serial.println("PH value too low!");
+    Serial.println("Optimizing PH value...");
+    tambahPH();
+  }
+  else
+  {
+    Serial.println("PH value not too low");
+  }
+  if (finalPH > maxph)
+  {
+    Serial.println("PH value too high!");
+    Serial.println("Optimizing PH value...");
+    kurangiPH();
+  }
+  else
+  {
+    Serial.println("EC value not too high");
+  }
+  Serial.println("All parameters optimized!");
 }
 
 //Membaca konduktivitas elektrik
@@ -237,14 +359,85 @@ void bacaPH ()
 void kirimData ()
 {
   String pathEC = "/Devices/" + ID + "/ec";
-  Firebase.setFloat(pathEC, ecValue);
+  Firebase.setFloat(pathEC, finalEC);
   String pathLux = "/Devices/" + ID + "/intensity";
-  Firebase.setFloat(pathLux, lux);
+  Firebase.setFloat(pathLux, finalLux);
   String pathFlow = "/Devices/" + ID + "/flow";
-  Firebase.setFloat(pathFlow, l_min);
+  Firebase.setFloat(pathFlow, finalFlow);
   String pathPH = "/Devices/" + ID + "/ph";
-  Firebase.setFloat(pathPH, phValue);
+  Firebase.setFloat(pathPH, finalPH);
 } 
+
+//Menambah EC
+void tambahEC ()
+{
+  while(finalEC < maxec)
+  {
+    digitalWrite(solenoidPin1, LOW);
+    Serial.println("A valve opened!");
+    delay(1000);
+    digitalWrite(solenoidPin1, HIGH);
+    Serial.println("A valve closed!");
+    delay(1000);
+    digitalWrite(solenoidPin2, LOW);
+    Serial.println("B valve opened!");
+    delay(1000);
+    digitalWrite(solenoidPin2, HIGH);
+    Serial.println("B valve closed!");
+    delay(1000);
+    finalEC = finalEC + 0.2;
+    Serial.print("EC: ");
+    Serial.println(finalEC);
+  } 
+}
+
+//Mengurangi EC
+void kurangiEC ()
+{
+  digitalWrite(solenoidPin3, LOW);
+  Serial.println("Aquades valve opened!");
+  while(finalEC >= maxec)
+  {
+    finalEC = finalEC - 0.1;
+    Serial.print("EC: ");
+    Serial.println(finalEC);
+    delay(1000);
+  }
+  digitalWrite(solenoidPin3, HIGH);
+  Serial.println("Aquades valve closed!");
+}
+
+//Menambah PH
+void tambahPH ()
+{
+  digitalWrite(solenoidPin5, LOW);
+  Serial.println("KOH valve opened!");
+  while(finalPH < maxph)
+  {
+    finalPH = finalPH + 0.1;
+    Serial.print("PH: ");
+    Serial.println(finalPH);
+    delay(1000);
+  }
+  digitalWrite(solenoidPin5, HIGH);
+  Serial.println("KOH valve closed!");
+}
+
+//Mengurangi PH
+void kurangiPH ()
+{
+  digitalWrite(solenoidPin4, LOW);
+  Serial.println("HCl valve opened!");
+  while(finalPH >= maxph)
+  {
+    finalPH = finalPH - 0.1;
+    Serial.print("PH: ");
+    Serial.println(finalPH);
+    delay(1000);
+  }
+  digitalWrite(solenoidPin4, HIGH);
+  Serial.println("HCl valve closed!");
+}
 
 //Mencari nilai median (untuk pembacaan konduktivitas elektrik)
 int getMedianNum(int bArray[], int iFilterLen)
